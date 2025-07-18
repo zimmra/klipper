@@ -1,0 +1,3 @@
+[submodule "eddy-ng"]
+	path = eddy-ng
+	url = https://github.com/vvuk/eddy-ng.git

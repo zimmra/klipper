@@ -1,0 +1,147 @@
+name: Update Fork with Eddy-NG
+
+on:
+  schedule:
+    # Run daily at 2 AM UTC
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+    # Allow manual triggering
+    inputs:
+      force_update:
+        description: 'Force update even if no changes'
+        required: false
+        default: false
+        type: boolean
+
+jobs:
+  update-fork:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.x'
+      
+      - name: Configure Git
+        run: |
+          git config --global user.name 'github-actions[bot]'
+          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+      
+      - name: Add upstream remote
+        run: |
+          git remote add upstream https://github.com/Klipper3D/klipper.git || true
+          git remote set-url upstream https://github.com/Klipper3D/klipper.git
+      
+      - name: Fetch upstream changes
+        run: |
+          git fetch upstream
+          echo "UPSTREAM_HASH=$(git rev-parse upstream/master)" >> $GITHUB_ENV
+          echo "CURRENT_HASH=$(git rev-parse HEAD)" >> $GITHUB_ENV
+      
+      - name: Check for upstream updates
+        id: check_upstream
+        run: |
+          if [ "${{ env.UPSTREAM_HASH }}" != "${{ env.CURRENT_HASH }}" ]; then
+            echo "has_upstream_updates=true" >> $GITHUB_OUTPUT
+            echo "Upstream has new commits"
+          else
+            echo "has_upstream_updates=false" >> $GITHUB_OUTPUT
+            echo "No upstream updates"
+          fi
+      
+      - name: Update eddy-ng submodule
+        id: update_eddy_ng
+        run: |
+          cd eddy-ng
+          EDDY_OLD_HASH=$(git rev-parse HEAD)
+          git fetch origin
+          git reset --hard origin/main
+          EDDY_NEW_HASH=$(git rev-parse HEAD)
+          cd ..
+          
+          if [ "$EDDY_OLD_HASH" != "$EDDY_NEW_HASH" ]; then
+            echo "has_eddy_updates=true" >> $GITHUB_OUTPUT
+            echo "Eddy-NG has updates"
+          else
+            echo "has_eddy_updates=false" >> $GITHUB_OUTPUT
+            echo "No eddy-ng updates"
+          fi
+      
+      - name: Merge upstream changes
+        if: steps.check_upstream.outputs.has_upstream_updates == 'true'
+        run: |
+          # Remove eddy-ng files before merge to avoid conflicts
+          python3 scripts/install_eddy_ng.py -u || true
+          
+          # Merge upstream changes
+          git merge upstream/master --no-edit --strategy-option=ours || {
+            echo "Merge conflict occurred. Attempting to resolve..."
+            # In case of conflicts, prefer our version for eddy-ng related files
+            git status --porcelain | grep "^UU" | while read -r line; do
+              file=$(echo "$line" | cut -d' ' -f2-)
+              echo "Resolving conflict in $file"
+              git add "$file"
+            done
+            git commit -m "Resolve merge conflicts with upstream" || true
+          }
+      
+      - name: Make install script executable
+        run: chmod +x scripts/install_eddy_ng.sh
+      
+      - name: Install eddy-ng integration
+        run: python3 scripts/install_eddy_ng.py
+      
+      - name: Check for changes
+        id: check_changes
+        run: |
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "has_changes=true" >> $GITHUB_OUTPUT
+            echo "Repository has changes"
+          else
+            echo "has_changes=false" >> $GITHUB_OUTPUT
+            echo "No changes detected"
+          fi
+      
+      - name: Commit and push changes
+        if: steps.check_changes.outputs.has_changes == 'true' || github.event.inputs.force_update == 'true'
+        run: |
+          git add .
+          
+          # Create commit message based on what was updated
+          COMMIT_MSG="Automated fork update"
+          
+          if [ "${{ steps.check_upstream.outputs.has_upstream_updates }}" == "true" ]; then
+            COMMIT_MSG="$COMMIT_MSG - Updated from upstream Klipper"
+          fi
+          
+          if [ "${{ steps.update_eddy_ng.outputs.has_eddy_updates }}" == "true" ]; then
+            COMMIT_MSG="$COMMIT_MSG - Updated eddy-ng"
+          fi
+          
+          if [ "${{ steps.check_upstream.outputs.has_upstream_updates }}" == "true" ] || [ "${{ steps.update_eddy_ng.outputs.has_eddy_updates }}" == "true" ]; then
+            COMMIT_MSG="$COMMIT_MSG - Reapplied eddy-ng integration"
+          fi
+          
+          # If forced update, mention it
+          if [ "${{ github.event.inputs.force_update }}" == "true" ]; then
+            COMMIT_MSG="$COMMIT_MSG (forced)"
+          fi
+          
+          git commit -m "$COMMIT_MSG" || exit 0
+          git push origin main
+      
+      - name: Create summary
+        run: |
+          echo "## Fork Update Summary" >> $GITHUB_STEP_SUMMARY
+          echo "- **Upstream updates**: ${{ steps.check_upstream.outputs.has_upstream_updates }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Eddy-NG updates**: ${{ steps.update_eddy_ng.outputs.has_eddy_updates }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Changes committed**: ${{ steps.check_changes.outputs.has_changes }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Upstream hash**: ${{ env.UPSTREAM_HASH }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Trigger**: ${{ github.event_name }}" >> $GITHUB_STEP_SUMMARY 
