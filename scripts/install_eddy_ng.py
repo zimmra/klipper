@@ -4,6 +4,7 @@ import os
 import sys
 import argparse
 import shutil
+import subprocess
 from pathlib import Path
 
 IS_MAC = os.path.isdir("/System/Library")
@@ -25,20 +26,22 @@ def get_script_dir():
 def get_repo_root():
     """Find the repository root by looking for key Klipper files"""
     script_dir = get_script_dir()
-    
+
     # Since we're in scripts/, the repo root should be parent directory
     potential_root = os.path.dirname(script_dir)
-    
+
     # Look for key Klipper files to confirm we're in the right place
     klipper_markers = ["klippy", "src", "Makefile", "README.md"]
-    
-    if all(os.path.exists(os.path.join(potential_root, marker)) for marker in klipper_markers):
+
+    if all(os.path.exists(os.path.join(potential_root, marker))
+           for marker in klipper_markers):
         return potential_root
-    
+
     # Fallback: check current directory
-    if all(os.path.exists(os.path.join(script_dir, marker)) for marker in klipper_markers):
+    if all(os.path.exists(os.path.join(script_dir, marker))
+           for marker in klipper_markers):
         return script_dir
-        
+
     return None
 
 
@@ -47,10 +50,36 @@ def get_eddy_ng_path(repo_root):
     return os.path.join(repo_root, "eddy-ng")
 
 
+def fix_whitespace_issues(file_path):
+    """Fix whitespace issues using the comprehensive fixer"""
+    script_dir = get_script_dir()
+    fixer_path = os.path.join(script_dir, "fix_whitespace.py")
+    
+    if not os.path.exists(fixer_path):
+        print(f"Warning: Whitespace fixer not found at {fixer_path}")
+        return False
+    
+    try:
+        result = subprocess.run([
+            sys.executable, fixer_path, file_path
+        ], capture_output=True, text=True)
+        
+        if result.returncode == 0:
+            print(f"Fixed whitespace issues in {file_path}")
+            return True
+        else:
+            print(f"Warning: Failed to fix whitespace in {file_path}")
+            print(f"Error: {result.stderr}")
+            return False
+    except Exception as e:
+        print(f"Warning: Error running whitespace fixer: {e}")
+        return False
+
+
 def uninstall_repo(target_dir: str):
     """Remove eddy-ng files from the repository"""
     print("Uninstalling eddy-ng from repository...")
-    
+
     # Remove copied files
     for src_file, dest_dir in FILES_TO_COPY.items():
         dest_path = os.path.join(target_dir, dest_dir)
@@ -65,37 +94,38 @@ def uninstall_repo(target_dir: str):
     print("Unpatching src/Makefile...")
     makefile_path = os.path.join(target_dir, "src/Makefile")
     if os.path.exists(makefile_path):
-        os.system(f"sed {SED_IN_PLACE_ARG} 's, sensor_ldc1612_ng.c,,' '{makefile_path}'")
+        os.system(f"sed {SED_IN_PLACE_ARG} 's, sensor_ldc1612_ng.c,,' "
+                  f"'{makefile_path}'")
 
     # Unpatch klippy/extras/bed_mesh.py
     print("Unpatching klippy/extras/bed_mesh.py...")
     bed_mesh_path = os.path.join(target_dir, "klippy/extras/bed_mesh.py")
     if os.path.exists(bed_mesh_path):
-        os.system(
-            f"sed {SED_IN_PLACE_ARG} 's,\"eddy\" in probe_name #eddy-ng,probe_name.startswith(\"probe_eddy_current\"),' '{bed_mesh_path}'"
-        )
-    
+        pattern = ('s,\"eddy\" in probe_name #eddy-ng,'
+                   'probe_name.startswith(\"probe_eddy_current\"),')
+        os.system(f"sed {SED_IN_PLACE_ARG} '{pattern}' '{bed_mesh_path}'")
+
     print("eddy-ng uninstalled from repository.")
 
 
 def install_repo(target_dir: str, uninstall: bool = False):
     """Install eddy-ng files into the repository"""
-    
+
     if uninstall:
         uninstall_repo(target_dir)
         return
 
     print("Installing eddy-ng into repository...")
     print("=====================================")
-    
+
     eddy_ng_path = get_eddy_ng_path(target_dir)
-    
+
     if not os.path.exists(eddy_ng_path):
         print(f"Error: eddy-ng submodule not found at {eddy_ng_path}")
         print("Make sure the eddy-ng submodule is properly initialized:")
         print("  git submodule update --init --recursive")
         sys.exit(1)
-    
+
     # Copy files to their destinations
     for src_file, dest_dir in FILES_TO_COPY.items():
         src_path = os.path.join(eddy_ng_path, src_file)
@@ -103,15 +133,20 @@ def install_repo(target_dir: str, uninstall: bool = False):
         dest_file = os.path.join(dest_path, os.path.basename(src_file))
 
         if not os.path.exists(src_path):
-            print(f"Warning: Source file {src_path} does not exist. Skipping.")
+            print(f"Warning: Source file {src_path} does not exist. "
+                  "Skipping.")
             continue
 
         if not os.path.exists(dest_path):
-            print(f"Warning: Destination directory {dest_path} does not exist. Skipping.")
+            print(f"Warning: Destination directory {dest_path} does not "
+                  "exist. Skipping.")
             continue
 
         print(f"Copying {src_file} to {dest_dir}/")
         shutil.copyfile(src_path, dest_file)
+
+        # Fix whitespace issues in the copied file
+        fix_whitespace_issues(dest_file)
 
     # Patch src/Makefile
     print("Patching src/Makefile...")
@@ -120,9 +155,12 @@ def install_repo(target_dir: str, uninstall: bool = False):
         # Check if already patched
         with open(makefile_path, 'r') as f:
             content = f.read()
-        
+
         if "sensor_ldc1612_ng.c" not in content:
-            os.system(f"sed {SED_IN_PLACE_ARG} 's,sensor_ldc1612.c$,sensor_ldc1612.c sensor_ldc1612_ng.c,' '{makefile_path}'")
+            pattern = ('s,sensor_ldc1612.c$,'
+                       'sensor_ldc1612.c sensor_ldc1612_ng.c,')
+            os.system(f"sed {SED_IN_PLACE_ARG} '{pattern}' "
+                      f"'{makefile_path}'")
             print("Makefile patched successfully.")
         else:
             print("Makefile already patched.")
@@ -136,11 +174,12 @@ def install_repo(target_dir: str, uninstall: bool = False):
         # Check if already patched
         with open(bed_mesh_path, 'r') as f:
             content = f.read()
-        
+
         if "#eddy-ng" not in content:
-            os.system(
-                f"sed {SED_IN_PLACE_ARG} 's,probe_name.startswith(\"probe_eddy_current\"),\"eddy\" in probe_name #eddy-ng,' '{bed_mesh_path}'"
-            )
+            pattern = ('s,probe_name.startswith(\"probe_eddy_current\"),'
+                       '\"eddy\" in probe_name #eddy-ng,')
+            os.system(f"sed {SED_IN_PLACE_ARG} '{pattern}' "
+                      f"'{bed_mesh_path}'")
             print("bed_mesh.py patched successfully.")
         else:
             print("bed_mesh.py already patched.")
@@ -151,23 +190,27 @@ def install_repo(target_dir: str, uninstall: bool = False):
     print("Installation complete!")
     print("======================")
     print("Files have been copied into the repository.")
-    print("When building firmware, make sure to enable CONFIG_WANT_LDC1612=y")
+    print("Whitespace issues have been automatically fixed.")
+    print("When building firmware, make sure to enable "
+          "CONFIG_WANT_LDC1612=y")
     print("in your configuration to include the eddy-ng sensor support.")
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Install eddy-ng into Klipper repository (for maintaining forks)"
+        description="Install eddy-ng into Klipper repository "
+                    "(for maintaining forks)"
     )
     parser.add_argument(
-        "-u", "--uninstall", 
-        action="store_true", 
+        "-u", "--uninstall",
+        action="store_true",
         help="Uninstall eddy-ng from repository"
     )
     parser.add_argument(
-        "target_dir", 
-        nargs="?", 
-        help="Target repository directory (defaults to auto-detected repo root)"
+        "target_dir",
+        nargs="?",
+        help="Target repository directory (defaults to auto-detected "
+             "repo root)"
     )
 
     args = parser.parse_args()
@@ -191,10 +234,12 @@ def main():
 
     # Check if it looks like a Klipper repository
     required_dirs = ["src", "klippy", "klippy/extras"]
-    missing_dirs = [d for d in required_dirs if not os.path.exists(os.path.join(target_dir, d))]
-    
+    missing_dirs = [d for d in required_dirs
+                    if not os.path.exists(os.path.join(target_dir, d))]
+
     if missing_dirs:
-        print(f"Error: Target directory doesn't appear to be a Klipper repository.")
+        print(f"Error: Target directory doesn't appear to be a Klipper "
+              "repository.")
         print(f"Missing directories: {', '.join(missing_dirs)}")
         sys.exit(1)
 

@@ -58,6 +58,13 @@ From the eddy-ng submodule to the main repository:
 1. **src/Makefile**: Adds `sensor_ldc1612_ng.c` to build when `CONFIG_WANT_LDC1612=y`
 2. **klippy/extras/bed_mesh.py**: Modifies probe detection to recognize eddy-ng probes
 
+### Whitespace Fixing
+
+The script automatically fixes common whitespace issues in copied files:
+- Removes trailing spaces
+- Ensures proper line endings
+- Attempts to break long lines where possible
+
 ## Automation
 
 This script is used by the GitHub Actions workflow (`.github/workflows/update-fork.yml`) to automatically maintain the eddy-ng integration when the fork is updated.
@@ -69,6 +76,7 @@ This script is used by the GitHub Actions workflow (`.github/workflows/update-fo
 - **Idempotent**: Safe to run multiple times
 - **Smart Patching**: Checks if patches are already applied
 - **Validation**: Ensures target is a valid Klipper repository
+- **Whitespace Compliance**: Automatically fixes whitespace issues
 
 ## Building Firmware
 
@@ -85,6 +93,7 @@ The script automatically:
 - Copies files from the submodule to the main repository
 - Applies patches to integrate with Klipper
 - Preserves the submodule relationship (files are copied, not moved)
+- Fixes whitespace issues to meet Klipper standards
 
 ## Error Handling
 
@@ -93,6 +102,7 @@ The script includes error handling for:
 - Invalid target directory
 - Missing source files
 - Already applied patches
+- Whitespace issues
 
 ## Compatibility
 
